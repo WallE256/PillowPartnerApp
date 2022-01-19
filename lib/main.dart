@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
+import 'package:flutter_blue/flutter_blue.dart';
 
 void main() {
   runApp(const MyApp());
@@ -12,36 +12,17 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'PillowPartner App',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
         primarySwatch: Colors.blue,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MyHomePage(title: 'PillowPartner App'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({Key? key, required this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -49,72 +30,166 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-  final flutterReactiveBle = FlutterReactiveBle();
+  bool _watchConnected = false;
+  bool _pillowConnected = false;
+  int _lastBPM = 80;
+  final FlutterBlue _flutterBlue = FlutterBlue.instance;
+  BluetoothDevice? _pillow;
+  BluetoothDevice? _watch = null;
+  BluetoothCharacteristic? _pillowCharacteristic;
+  BluetoothCharacteristic? _watchCharacteristic;
 
-  void _incrementCounter() {
-    flutterReactiveBle.scanForDevices(withServices: [], scanMode: ScanMode.lowLatency).listen((device) {
-      print(device.name);
-    });
+  void _connectPillow() async {
+    if (!_pillowConnected) {
+      await Future.wait([_flutterBlue.scan().listen((r) {
+        if (r.device.id.id == "84:CC:A8:61:2D:8A") {
+          print("hello " + r.device.name);
+          _pillow = r.device;
+          _flutterBlue.stopScan();
+        }
+      }).asFuture()
+      ]);
+      await _pillow?.connect();
+      _pillowConnected = true;
+
+      List<BluetoothService>? services = await _pillow?.discoverServices();
+      services?.forEach((service) {
+        print(service.uuid);
+        if (service.uuid.toString() == "61535c46-202a-4859-a213-520ef987c606") {
+          _pillowCharacteristic = service.characteristics.first;
+        }
+      });
+    } else {
+      await _pillow?.disconnect();
+      _pillowConnected = false;
+    }
+
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _pillowConnected = _pillowConnected;
+    });
+  }
+
+  void _updatePillow() async {
+    await _pillowCharacteristic?.write([_lastBPM], withoutResponse: false);
+  }
+
+  void _connectWatch() async {
+    if (!_watchConnected) {
+      await Future.wait([_flutterBlue.scan(timeout: const Duration(seconds: 10))
+          .listen((r) { if (r.device.id.id == "FA:3B:3C:5E:B9:2C") {
+          print("hello " + r.device.name);
+          _watch = r.device;
+          _flutterBlue.stopScan();
+        }
+      }).asFuture()
+      ]);
+      await _watch?.connect();
+      _watchConnected = true;
+
+      List<BluetoothService>? services = await _watch?.discoverServices();
+      services?.forEach((service) {
+        if (service.uuid.toString() == "0000180d-0000-1000-8000-00805f9b34fb") {
+          _watchCharacteristic = service.characteristics.first;
+          print(service.uuid);
+        }
+      });
+      await _watchCharacteristic?.setNotifyValue(true);
+      _watchCharacteristic?.value.listen((value) async {
+        print(value[1]);
+        if (_watchConnected && _pillowConnected) {
+          print(_pillowCharacteristic?.uuid);
+          setState(() {
+            _lastBPM = value[1];
+          });
+          _updatePillow();
+          print("should be ok");
+        }
+      });
+
+    } else {
+      await _watch?.disconnect();
+      _watchConnected = false;
+    }
+
+    setState(() {
+      _watchConnected = _watchConnected;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final ButtonStyle buttonStyle =
+        ElevatedButton.styleFrom(textStyle: Theme.of(context).textTheme.button);
+    final TextStyle? statusStyle = Theme.of(context).textTheme.headline5;
+    final TextStyle? connectedStyle = Theme.of(context).textTheme.headline6;
+
     return Scaffold(
       appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
-        ),
+      body: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: <Widget>[
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Text(
+                    'Watch status:',
+                    style: statusStyle,
+                  ),
+                  Text(
+                    _watchConnected ? "Connected" : "Not Connected",
+                    style: connectedStyle,
+                  ),
+                  ElevatedButton(
+                    onPressed: _connectWatch,
+                    child: Text(!_watchConnected ? "Connect" : "Disconnect"),
+                    style: buttonStyle,
+                  ),
+                ],
+              ),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Text(
+                    'Pillow status:',
+                    style: statusStyle,
+                  ),
+                  Text(
+                    _pillowConnected ? "Connected" : "Not Connected",
+                    style: connectedStyle,
+                  ),
+                  ElevatedButton(
+                    onPressed: _connectPillow,
+                    child: Text(!_pillowConnected ? "Connect" : "Disconnect"),
+                    style: buttonStyle,
+                  ),
+                ],
+              )
+            ],
+          ),
+          Column(
+            children: [
+              Text(
+                'Last BPM:',
+                style: statusStyle,
+              ),
+              Text(
+                "$_lastBPM",
+                style: connectedStyle,
+              ),
+            ],
+          )
+        ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      // floatingActionButton: FloatingActionButton(
+      //   onPressed: _incrementCounter,
+      //   tooltip: 'Increment',
+      //   child: const Icon(Icons.add),
+      // ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
